@@ -37,15 +37,21 @@ export default function LoungePage() {
     return () => unsubscribe();
   }, [router]);
 
-  const handleRandomMatch = async () => {
+  const handleRandomMatch = async (callType: 'audio' | 'video') => {
     if (!user || !language) return;
     setIsMatching(true);
 
     try {
       const callsRef = collection(db, 'calls');
       
-      // 1. Look for an existing waiting call with the same language
-      const q = query(callsRef, where('status', '==', 'waiting'), where('language', '==', language), limit(1));
+      // Look for an existing waiting call with the same language AND call type
+      const q = query(
+        callsRef, 
+        where('status', '==', 'waiting'), 
+        where('language', '==', language),
+        where('type', '==', callType),
+        limit(1)
+      );
       const querySnapshot = await getDocs(q);
 
       if (!querySnapshot.empty) {
@@ -55,16 +61,17 @@ export default function LoungePage() {
           status: 'connecting',
           answererId: user.uid
         });
-        router.push(`/call/${matchDoc.id}?mode=answer`);
+        router.push(`/call/${matchDoc.id}?mode=answer&type=${callType}`);
       } else {
         // No match found. Create a new call as the offerer
         const newCallDoc = await addDoc(callsRef, {
           status: 'waiting',
           language: language,
+          type: callType,
           offererId: user.uid,
           createdAt: new Date()
         });
-        router.push(`/call/${newCallDoc.id}?mode=offer`);
+        router.push(`/call/${newCallDoc.id}?mode=offer&type=${callType}`);
       }
     } catch (error) {
       console.error("Error finding a match:", error);
@@ -102,13 +109,19 @@ export default function LoungePage() {
           <button 
             className="btn-primary" 
             style={{ padding: '20px 40px', fontSize: '1.2rem', opacity: isMatching ? 0.7 : 1 }}
-            onClick={handleRandomMatch}
+            onClick={() => handleRandomMatch('audio')}
             disabled={isMatching}
           >
             {isMatching ? 'Finding Match...' : '🎧 Random Audio Match'}
           </button>
-          <button className="btn-primary" style={{ padding: '20px 40px', fontSize: '1.2rem', background: 'var(--color-charcoal)', boxShadow: 'none' }}>
-            🌍 View Active Rooms
+          
+          <button 
+            className="btn-primary" 
+            style={{ padding: '20px 40px', fontSize: '1.2rem', background: 'var(--gradient-neon)', opacity: isMatching ? 0.7 : 1 }}
+            onClick={() => handleRandomMatch('video')}
+            disabled={isMatching}
+          >
+            {isMatching ? 'Finding Match...' : '🎥 Random Video Match'}
           </button>
         </div>
       </div>
