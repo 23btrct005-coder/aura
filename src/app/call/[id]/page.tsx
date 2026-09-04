@@ -50,7 +50,7 @@ export default function CallPage() {
 
     const setupWebRTC = async () => {
       try {
-        setCallStatus(\`Requesting \${isVideo ? 'camera and ' : ''}microphone access...\`);
+        setCallStatus(`Requesting ${isVideo ? 'camera and ' : ''}microphone access...`);
         
         // 1. Get local media stream (audio only, or audio+video)
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideo });
@@ -311,13 +311,13 @@ export default function CallPage() {
         </button>
       </div>
 
-      <style dangerouslySetInnerHTML={{__html: \`
+      <style dangerouslySetInnerHTML={{__html: `
         @keyframes pulse {
           0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(217,70,239, 0.4); }
           70% { transform: scale(1.05); box-shadow: 0 0 0 20px rgba(217,70,239, 0); }
           100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(217,70,239, 0); }
         }
-      \`}} />
+      `}} />
     </main>
   );
 }
