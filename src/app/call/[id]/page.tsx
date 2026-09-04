@@ -4,13 +4,13 @@ import { useEffect, useState, useRef } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { auth, db } from '../../../lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc, setDoc, onSnapshot, updateDoc, collection, addDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, updateDoc, collection, addDoc } from 'firebase/firestore';
+import { motion, AnimatePresence } from 'framer-motion';
+import { PhoneOff, Mic, MicOff, Video as VideoIcon, VideoOff, Users } from 'lucide-react';
 
 const servers = {
   iceServers: [
-    {
-      urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'],
-    },
+    { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
   ],
   iceCandidatePoolSize: 10,
 };
@@ -27,6 +27,8 @@ export default function CallPage() {
   const [user, setUser] = useState<any>(null);
   const [callStatus, setCallStatus] = useState<string>('Initializing WebRTC...');
   const [error, setError] = useState<string | null>(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -52,7 +54,6 @@ export default function CallPage() {
       try {
         setCallStatus(`Requesting ${isVideo ? 'camera and ' : ''}microphone access...`);
         
-        // 1. Get local media stream (audio only, or audio+video)
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideo });
         localStreamRef.current = stream;
         
@@ -60,15 +61,12 @@ export default function CallPage() {
           localVideoRef.current.srcObject = stream;
         }
 
-        // 2. Initialize Peer Connection
         setCallStatus('Setting up connection...');
         const pc = new RTCPeerConnection(servers);
         pcRef.current = pc;
 
-        // Add local tracks to the connection
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
-        // Listen for remote tracks
         pc.ontrack = (event) => {
           if (remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = event.streams[0];
@@ -80,7 +78,6 @@ export default function CallPage() {
         const answerCandidatesRef = collection(callDocRef, 'answerCandidates');
 
         if (mode === 'offer') {
-          // --- OFFERER LOGIC ---
           setCallStatus('Waiting for someone to join...');
           
           pc.onicecandidate = async (event) => {
@@ -92,42 +89,28 @@ export default function CallPage() {
           const offerDescription = await pc.createOffer();
           await pc.setLocalDescription(offerDescription);
 
-          const offer = {
-            sdp: offerDescription.sdp,
-            type: offerDescription.type,
-          };
-
-          await updateDoc(callDocRef, { offer });
+          await updateDoc(callDocRef, { offer: { sdp: offerDescription.sdp, type: offerDescription.type } });
 
           unsubscribeAnswer = onSnapshot(callDocRef, (snapshot) => {
             const data = snapshot.data();
             if (!pc.currentRemoteDescription && data?.answer) {
               setCallStatus('Connecting...');
-              const answerDescription = new RTCSessionDescription(data.answer);
-              pc.setRemoteDescription(answerDescription);
+              pc.setRemoteDescription(new RTCSessionDescription(data.answer));
             }
-            if (data?.status === 'ended') {
-              handleRemoteHangup();
-            }
+            if (data?.status === 'ended') handleRemoteHangup();
           });
 
           unsubscribeAnswerCandidates = onSnapshot(answerCandidatesRef, (snapshot) => {
             snapshot.docChanges().forEach((change) => {
-              if (change.type === 'added') {
-                const candidate = new RTCIceCandidate(change.doc.data());
-                pc.addIceCandidate(candidate);
-              }
+              if (change.type === 'added') pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
             });
           });
 
         } else if (mode === 'answer') {
-          // --- ANSWERER LOGIC ---
           setCallStatus('Match found! Connecting to peer...');
 
           pc.onicecandidate = async (event) => {
-            if (event.candidate) {
-              await addDoc(answerCandidatesRef, event.candidate.toJSON());
-            }
+            if (event.candidate) await addDoc(answerCandidatesRef, event.candidate.toJSON());
           };
 
           const callData = (await getDoc(callDocRef)).data();
@@ -136,32 +119,19 @@ export default function CallPage() {
             return;
           }
 
-          const offerDescription = callData.offer;
-          await pc.setRemoteDescription(new RTCSessionDescription(offerDescription));
-
+          await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
           const answerDescription = await pc.createAnswer();
           await pc.setLocalDescription(answerDescription);
-
-          const answer = {
-            sdp: answerDescription.sdp,
-            type: answerDescription.type,
-          };
-
-          await updateDoc(callDocRef, { answer });
+          await updateDoc(callDocRef, { answer: { sdp: answerDescription.sdp, type: answerDescription.type } });
 
           unsubscribeOfferCandidates = onSnapshot(offerCandidatesRef, (snapshot) => {
             snapshot.docChanges().forEach((change) => {
-              if (change.type === 'added') {
-                const candidate = new RTCIceCandidate(change.doc.data());
-                pc.addIceCandidate(candidate);
-              }
+              if (change.type === 'added') pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
             });
           });
           
           unsubscribeCall = onSnapshot(callDocRef, (snapshot) => {
-            if (snapshot.data()?.status === 'ended') {
-              handleRemoteHangup();
-            }
+            if (snapshot.data()?.status === 'ended') handleRemoteHangup();
           });
         }
 
@@ -191,133 +161,142 @@ export default function CallPage() {
     };
   }, [user, callId, mode, isVideo]);
 
+  const toggleMute = () => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach(track => {
+        track.enabled = !track.enabled;
+        setIsMuted(!track.enabled);
+      });
+    }
+  };
+
+  const toggleVideo = () => {
+    if (localStreamRef.current && isVideo) {
+      localStreamRef.current.getVideoTracks().forEach(track => {
+        track.enabled = !track.enabled;
+        setIsVideoOff(!track.enabled);
+      });
+    }
+  };
+
   const handleRemoteHangup = () => {
     setCallStatus('The other person ended the call.');
     cleanupAndLeave(true);
   };
 
   const endCall = async () => {
-    if (callId) {
-      await updateDoc(doc(db, 'calls', callId), { status: 'ended' });
-    }
+    if (callId) await updateDoc(doc(db, 'calls', callId), { status: 'ended' });
     cleanupAndLeave(true);
   };
 
   const cleanupAndLeave = (redirect: boolean) => {
     if (pcRef.current) pcRef.current.close();
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
-    }
-    if (redirect) {
-      setTimeout(() => {
-        router.push('/lounge');
-      }, 2000);
-    }
+    if (localStreamRef.current) localStreamRef.current.getTracks().forEach(track => track.stop());
+    if (redirect) setTimeout(() => router.push('/lounge'), 2000);
   };
 
-  if (!user) return <div style={{ padding: '2rem', color: 'white' }}>Loading...</div>;
+  if (!user) return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#000' }}></div>;
 
   return (
     <main style={{ width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative', background: '#000' }}>
       
-      {/* Remote Video (Fullscreen Background) or Audio pulsing UI */}
-      {isVideo ? (
-        <video 
-          ref={remoteVideoRef} 
-          autoPlay 
-          playsInline 
-          style={{ 
-            width: '100%', 
-            height: '100%', 
-            objectFit: 'cover',
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            zIndex: 1,
-            opacity: callStatus.includes('Connected') ? 1 : 0.2,
-            transition: 'opacity 1s ease'
-          }} 
-        />
-      ) : (
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1 }}>
-           <div style={{
-            width: '120px',
-            height: '120px',
-            borderRadius: '50%',
-            background: 'var(--gradient-neon)',
-            boxShadow: callStatus.includes('Connected') ? '0 0 40px rgba(139,92,246,0.8)' : '0 0 40px rgba(139,92,246,0.3)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            animation: callStatus.includes('Connected') ? 'pulse 1s infinite' : 'pulse 2.5s infinite'
-          }}>
-            <span style={{ fontSize: '3rem' }}>🎧</span>
-          </div>
-          <audio ref={remoteVideoRef} autoPlay playsInline style={{ display: 'none' }} />
-        </div>
-      )}
-
-      {/* Local Video (Picture-in-Picture) */}
-      {isVideo ? (
-        <div style={{
-          position: 'absolute',
-          bottom: '120px',
-          right: '32px',
-          width: '150px',
-          height: '220px',
-          borderRadius: '16px',
-          overflow: 'hidden',
-          zIndex: 10,
-          boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
-          border: '2px solid rgba(255,255,255,0.2)'
-        }}>
-          <video 
-            ref={localVideoRef} 
+      {/* Remote Video or Audio Status */}
+      <AnimatePresence>
+        {isVideo ? (
+          <motion.video 
+            initial={{ opacity: 0, scale: 1.05 }}
+            animate={{ opacity: callStatus.includes('Connected') ? 1 : 0.3, scale: 1 }}
+            transition={{ duration: 1 }}
+            ref={remoteVideoRef} 
             autoPlay 
-            muted 
             playsInline 
-            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} 
+            style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0, zIndex: 1 }} 
           />
-        </div>
-      ) : (
-        <audio ref={localVideoRef} autoPlay muted playsInline style={{ display: 'none' }} />
+        ) : (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1 }}>
+            <motion.div 
+              animate={{ 
+                scale: callStatus.includes('Connected') ? [1, 1.05, 1] : 1,
+                boxShadow: callStatus.includes('Connected') ? ['0 0 0 0 rgba(217,70,239, 0.4)', '0 0 0 20px rgba(217,70,239, 0)', '0 0 0 0 rgba(217,70,239, 0)'] : 'none'
+              }}
+              transition={{ repeat: Infinity, duration: 2 }}
+              style={{ width: '120px', height: '120px', borderRadius: '50%', background: 'var(--gradient-neon)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Users size={48} color="white" />
+            </motion.div>
+            <audio ref={remoteVideoRef} autoPlay playsInline style={{ display: 'none' }} />
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Local Video (PiP) */}
+      {isVideo && (
+        <motion.div 
+          initial={{ opacity: 0, y: 50, scale: 0.8 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ delay: 0.5, type: 'spring' }}
+          style={{
+            position: 'absolute',
+            bottom: '120px',
+            right: '32px',
+            width: '150px',
+            height: '220px',
+            borderRadius: '16px',
+            overflow: 'hidden',
+            zIndex: 10,
+            boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+            border: '2px solid rgba(255,255,255,0.2)'
+          }}
+        >
+          {isVideoOff ? (
+            <div style={{ width: '100%', height: '100%', background: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <VideoOff color="var(--text-muted)" size={32} />
+            </div>
+          ) : (
+            <video ref={localVideoRef} autoPlay muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} />
+          )}
+        </motion.div>
       )}
 
-      {/* Overlay UI (Status & Controls) */}
-      <div style={{
-        position: 'absolute',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        padding: '32px',
-        background: 'linear-gradient(to top, rgba(0,0,0,0.9), transparent)',
-        zIndex: 20,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center'
-      }}>
-        <h2 style={{ fontSize: '1.5rem', marginBottom: '8px', color: 'white', textShadow: '0 2px 10px rgba(0,0,0,0.5)' }}>
-          {error ? 'Error' : callStatus}
-        </h2>
+      {/* Overlay UI & Floating Controls */}
+      <motion.div 
+        initial={{ opacity: 0, y: 100 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.3, type: 'spring' }}
+        style={{
+          position: 'absolute',
+          bottom: '32px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 20,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '24px'
+        }}
+      >
+        <div style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(10px)', padding: '8px 24px', borderRadius: '100px', border: '1px solid rgba(255,255,255,0.1)' }}>
+          <span style={{ color: 'white', fontWeight: 500 }}>{error ? 'Error' : callStatus}</span>
+        </div>
         
-        {error && <p style={{ color: 'var(--color-coral)', marginBottom: '16px' }}>{error}</p>}
+        {error && <p style={{ color: 'var(--color-coral)' }}>{error}</p>}
 
-        <button 
-          className="btn-primary" 
-          style={{ background: 'var(--color-coral)', boxShadow: '0 0 20px rgba(244,63,94,0.4)' }}
-          onClick={endCall}
-        >
-          End Call
-        </button>
-      </div>
+        <div style={{ display: 'flex', gap: '16px' }}>
+          <button onClick={toggleMute} style={{ width: '56px', height: '56px', borderRadius: '50%', background: isMuted ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.5)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', cursor: 'pointer', transition: 'all 0.2s' }}>
+            {isMuted ? <MicOff size={24} /> : <Mic size={24} />}
+          </button>
+          
+          {isVideo && (
+            <button onClick={toggleVideo} style={{ width: '56px', height: '56px', borderRadius: '50%', background: isVideoOff ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.5)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', cursor: 'pointer', transition: 'all 0.2s' }}>
+              {isVideoOff ? <VideoOff size={24} /> : <VideoIcon size={24} />}
+            </button>
+          )}
 
-      <style dangerouslySetInnerHTML={{__html: `
-        @keyframes pulse {
-          0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(217,70,239, 0.4); }
-          70% { transform: scale(1.05); box-shadow: 0 0 0 20px rgba(217,70,239, 0); }
-          100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(217,70,239, 0); }
-        }
-      `}} />
+          <button onClick={endCall} style={{ width: '56px', height: '56px', borderRadius: '50%', background: 'var(--color-coral)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', cursor: 'pointer', boxShadow: '0 0 20px rgba(244,63,94,0.4)', transition: 'all 0.2s' }}>
+            <PhoneOff size={24} />
+          </button>
+        </div>
+      </motion.div>
     </main>
   );
 }
