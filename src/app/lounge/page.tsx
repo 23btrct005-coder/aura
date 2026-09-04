@@ -14,7 +14,7 @@ export default function LoungePage() {
   const [language, setLanguage] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
   const [isMatching, setIsMatching] = useState(false);
-  const [totalUsers, setTotalUsers] = useState(1);
+  const [onlineUsers, setOnlineUsers] = useState(1);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'profile' | 'settings'>('dashboard');
 
   const [editLanguage, setEditLanguage] = useState('');
@@ -30,11 +30,24 @@ export default function LoungePage() {
       setUser(currentUser);
       
       try {
-        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        const userRef = doc(db, 'users', currentUser.uid);
+        const userDoc = await getDoc(userRef);
         if (userDoc.exists()) {
           setLanguage(userDoc.data().languagePreference || '');
           setEditLanguage(userDoc.data().languagePreference || '');
         }
+        
+        // Mark user as online
+        await updateDoc(userRef, { isOnline: true });
+
+        // Handle browser close
+        const handleUnload = () => {
+          // Note: navigator.sendBeacon is better, but this is a simple prototype approach
+          updateDoc(userRef, { isOnline: false }).catch(() => {});
+        };
+        window.addEventListener('beforeunload', handleUnload);
+        
+        return () => window.removeEventListener('beforeunload', handleUnload);
       } catch (error) {
         console.error("Error fetching user data:", error);
       } finally {
@@ -42,10 +55,11 @@ export default function LoungePage() {
       }
     });
 
-    // Real-time listener for total registered users
+    // Real-time listener for ONLINE users
     const usersRef = collection(db, 'users');
-    const unsubscribeUsers = onSnapshot(usersRef, (snapshot) => {
-      setTotalUsers(snapshot.size);
+    const q = query(usersRef, where('isOnline', '==', true));
+    const unsubscribeUsers = onSnapshot(q, (snapshot) => {
+      setOnlineUsers(snapshot.size || 1); // Fallback to 1 (yourself) if latency
     });
 
     return () => {
@@ -105,7 +119,10 @@ export default function LoungePage() {
     setIsSaving(false);
   };
 
-  const handleSignOut = () => {
+  const handleSignOut = async () => {
+    if (user) {
+      await updateDoc(doc(db, 'users', user.uid), { isOnline: false });
+    }
     signOut(auth);
   };
 
@@ -181,8 +198,8 @@ export default function LoungePage() {
 
                 <div className="glass-panel" style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 24px', borderRadius: '100px' }}>
                   <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 10px #10b981', animation: 'pulse 2s infinite' }}></div>
-                  <span style={{ color: 'white', fontWeight: 600 }}>{totalUsers.toLocaleString()}</span>
-                  <span style={{ color: 'var(--text-muted)' }}>registered users</span>
+                  <span style={{ color: 'white', fontWeight: 600 }}>{onlineUsers.toLocaleString()}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>online now</span>
                 </div>
               </header>
 
